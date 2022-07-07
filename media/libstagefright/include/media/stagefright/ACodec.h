@@ -115,9 +115,30 @@ struct ACodec : public AHierarchicalStateMachine, public CodecBase {
 protected:
     virtual ~ACodec();
     virtual status_t setupCustomCodec(
-        status_t err, const char *mime, const sp<AMessage> &msg);
+        status_t err, const char *mime, bool encoder, const sp<AMessage> &msg);
     virtual status_t GetVideoCodingTypeFromMime(
         const char *mime, OMX_VIDEO_CODINGTYPE *codingType);
+    virtual status_t setOmxReadMultiFrame(const sp<IOMXNode> & /*omxNode*/,
+                const sp<AMessage> & /*msg*/) {
+                ALOGD("virtual setOmxReadMultiFrame");
+                return BAD_VALUE;
+    };
+
+    virtual status_t setMtkParameters(const sp<IOMXNode> & /*omxNode*/,
+            const sp<AMessage> & /*params*/, bool /*isEncoder*/) {
+        ALOGD("virtual setMtkParameters");
+        return OK;
+    };
+
+    //mtkadd set AvSyncRefTime to omx
+    virtual status_t setAVSyncTime(const char* /*componentName*/,
+            const sp<AMessage> /*bufferMeta*/,
+            const sp<IOMXNode> & /*omxNode*/,
+            const sp<AMessage> & /*msg*/) {
+        return OK;
+    };
+
+//private:
 
     struct BaseState;
     struct UninitializedState;

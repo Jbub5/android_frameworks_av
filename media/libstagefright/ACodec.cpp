@@ -80,7 +80,7 @@ using hardware::media::omx::V1_0::Status;
 using server_configurable_flags::GetServerConfigurableFlag;
 
 enum {
-    kMaxIndicesToCheck = 32, // used when enumerating supported formats and profiles
+    kMaxIndicesToCheck = 128, // used when enumerating supported formats and profiles
 };
 
 namespace {
@@ -641,7 +641,7 @@ ACodec::ACodec()
 ACodec::~ACodec() {
 }
 
-status_t ACodec::setupCustomCodec(status_t err, const char *, const sp<AMessage> &) {
+status_t ACodec::setupCustomCodec(status_t err, const char *, bool, const sp<AMessage> &) {
     return err;
 }
 
@@ -1100,6 +1100,26 @@ status_t ACodec::setupNativeWindowSizeFormatAndUsage(
     OMX_PARAM_PORTDEFINITIONTYPE def;
     InitOMXParams(&def);
     def.nPortIndex = kPortIndexOutput;
+
+//mtk add query HWC usage for decoder
+    OMX_U32 ANW_HWComposer = 0;
+    OMX_PARAM_U32TYPE param;
+    OMX_INDEXTYPE index2;
+    status_t err2 = nativeWindow->query(nativeWindow, NATIVE_WINDOW_QUEUES_TO_WINDOW_COMPOSER , (int *)&ANW_HWComposer);
+    if (OK == err2) {
+        err2 = mOMXNode->getExtensionIndex("OMX.MTK.index.param.video.ANW_HWComposer", &index2);
+        if (OK == err2) {
+            InitOMXParams(&param);
+            param.nU32 = ANW_HWComposer;
+            err2 = mOMXNode->setParameter(index2, &param, sizeof(param));
+            if (OK != err2) {
+                ALOGW("Failed to set ANW_HWComposer to OMX, ignoring (%d)", err2);
+            }
+        }
+    }
+    else {
+        ALOGW("Failed to query NW for HWC usage, ignoring: %s (%d)", strerror(-err2), -err2);
+    }
 
     status_t err = mOMXNode->getParameter(
             OMX_IndexParamPortDefinition, &def, sizeof(def));
@@ -2254,6 +2274,14 @@ status_t ACodec::configureCodec(
                     sampleRate,
                     numChannels);
         }
+//mtkadd+
+        if (!strcmp(mComponentName.c_str(), "OMX.MTK.AUDIO.DECODER.MP3")
+                && err == OK && setOmxReadMultiFrame(mOMXNode, msg) == OK) {
+            msg->setInt32("mtkMp3Codec", 1);
+        } else {
+            ALOGW("setOmxReadMultiFrame fail!");
+        }
+//mtkadd-
     } else if (!strcasecmp(mime, MEDIA_MIMETYPE_AUDIO_AAC)) {
         int32_t numChannels, sampleRate;
         if (!msg->findInt32("channel-count", &numChannels)
@@ -2420,7 +2448,7 @@ status_t ACodec::configureCodec(
             err = setupAC4Codec(encoder, numChannels, sampleRate);
         }
     } else {
-        err = setupCustomCodec(err, mime, msg);
+        err = setupCustomCodec(err, mime, encoder, msg);
     }
 
     if (err != OK) {
@@ -2471,6 +2499,12 @@ status_t ACodec::configureCodec(
     if (rateFloat > 0) {
         err = setOperatingRate(rateFloat, mIsVideo);
         err = OK; // ignore errors
+    }
+
+    //set mtk parameters
+    status_t err_mtkparam = setMtkParameters(mOMXNode, msg, mIsEncoder);
+    if (err_mtkparam != OK) {
+        return err_mtkparam;
     }
 
     if (err == OK) {
@@ -4230,6 +4264,12 @@ status_t ACodec::setupVideoEncoder(
     video_def->nBitrate = bitrate;
     video_def->eCompressionFormat = compressionFormat;
     video_def->eColorFormat = OMX_COLOR_FormatUnused;
+
+    //set mtk parameters
+    status_t err_mtkparam = setMtkParameters(mOMXNode, msg, mIsEncoder);
+    if (err_mtkparam != OK) {
+        return err_mtkparam;
+    }
 
     err = mOMXNode->setParameter(
             OMX_IndexParamPortDefinition, &def, sizeof(def));
@@ -6861,6 +6901,11 @@ void ACodec::BaseState::onOutputBufferDrained(const sp<AMessage> &msg) {
     int32_t discarded = 0;
     msg->findInt32("discarded", &discarded);
 
+//   set AvSyncRefTime to omx +
+    mCodec->setAVSyncTime(mCodec->mComponentName.c_str(),buffer->meta(),
+            mCodec->mOMXNode, msg);
+//   set AvSyncRefTime to omx -
+
     ssize_t index;
     BufferInfo *info = mCodec->findBufferByID(kPortIndexOutput, bufferID, &index);
     BufferInfo::Status status = BufferInfo::getSafeStatus(info);
@@ -8259,6 +8304,12 @@ status_t ACodec::setParameters(const sp<AMessage> &params) {
                 return err;
             }
         }
+    }
+
+    //set mtk parameters
+    status_t err_mtkparam = setMtkParameters(mOMXNode, params, mIsEncoder);
+    if (err_mtkparam != OK) {
+        return err_mtkparam;
     }
 
     return setVendorParameters(params);
